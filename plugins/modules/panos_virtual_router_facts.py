@@ -40,6 +40,11 @@ options:
         description:
             - Name of the virtual router.
         type: str
+    match_route:
+        description:
+            - Performs a reverse lookup on the virtual router I(name) for the
+              route matching traffic to this IP address.
+        type: str
 '''
 
 EXAMPLES = '''
@@ -55,6 +60,12 @@ EXAMPLES = '''
   panos_virtual_router_facts:
     provider: '{{ provider }}'
   register: vrlist
+
+- name: Look up route for '192.168.1.10'
+  panos_virtual_router_facts:
+    provider: '{{ provider }}'
+    match_route: '192.168.1.10'
+  register: route
 '''
 
 RETURN = '''
@@ -100,6 +111,23 @@ vrlist:
     description: List of virtual router specs.
     returned: When I(name) is not specified.
     type: list
+route:
+    description: Route lookup
+    returned: When I(name) and I(match_route) are specified.
+    type: dict
+    contains:
+        nh:
+            description: Type of route
+            type: str
+        interface:
+            description: Interface for route
+            type: str
+        dp:
+            description: Dataplane CPU
+            type: str
+        src:
+            description: Source address for route
+            type: str
 '''
 
 from ansible.module_utils.basic import AnsibleModule
@@ -116,6 +144,39 @@ except ImportError:
         pass
 
 
+import xml.etree.ElementTree as ET
+
+
+def match_route(module, device):
+    ip = module.params['match_route']
+    vr = module.params['name']
+
+    spec = {
+        'ip': ip,
+        'virtual-router': vr
+    }
+
+    # Build XML command, starting from 'fib-lookup'.
+    cmd = '<test><routing><fib-lookup/></routing></test>'
+    tree = ET.fromstring(cmd)
+    match = tree.find('.//fib-lookup')
+
+    for element, text in spec.items():
+        e = ET.SubElement(match, element)
+        e.text = text
+
+    cmd_str = ET.tostring(tree)
+    result = device.op(cmd_str, cmd_xml=False)
+
+    output = {}
+
+    route = result.find('.//result')
+    for e in route:
+        output[e.tag] = e.text
+
+    return output
+
+
 def main():
     helper = get_connection(
         template=True,
@@ -123,6 +184,7 @@ def main():
         with_classic_provider_spec=True,
         argument_spec=dict(
             name=dict(),
+            match_route=dict(),
         ),
     )
     module = AnsibleModule(
@@ -135,6 +197,7 @@ def main():
     parent = helper.get_pandevice_parent(module)
 
     name = module.params['name']
+
     if name is None:
         try:
             listing = VirtualRouter.refreshall(parent)
@@ -144,15 +207,20 @@ def main():
         vrlist = helper.to_module_dict(listing)
         module.exit_json(changed=False, vrlist=vrlist)
 
-    vr = VirtualRouter(name)
-    parent.add(vr)
-    try:
-        vr.refresh()
-    except PanDeviceError as e:
-        module.fail_json(msg='Failed refresh: {0}'.format(e))
+    if module.params['match_route']:
+        route = match_route(module, parent)
+        module.exit_json(changed=False, route=route)
 
-    spec = helper.to_module_dict(vr)
-    module.exit_json(changed=False, spec=spec)
+    else:
+        vr = VirtualRouter(name)
+        parent.add(vr)
+        try:
+            vr.refresh()
+        except PanDeviceError as e:
+            module.fail_json(msg='Failed refresh: {0}'.format(e))
+
+        spec = helper.to_module_dict(vr)
+        module.exit_json(changed=False, spec=spec)
 
 
 if __name__ == '__main__':
