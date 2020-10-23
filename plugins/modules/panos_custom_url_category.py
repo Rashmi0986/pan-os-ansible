@@ -92,6 +92,7 @@ except ImportError:
 
 def main():
     helper = get_connection(
+        min_pandevice_version=(1, 0, 0),
         vsys=True,
         device_group=True,
         with_classic_provider_spec=True,
@@ -122,6 +123,7 @@ def main():
         'url_value': module.params['url_value'],
     }
 
+    # type param doesn't exist on PAN-OS before 9.0.
     if device.get_device_version() >= (9, 0, 0):
         spec.update({'type': module.params['type']})
 
